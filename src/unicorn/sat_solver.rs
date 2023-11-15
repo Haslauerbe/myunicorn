@@ -1,8 +1,13 @@
-use crate::unicorn::bitblasting::{get_constant, or_gate, Gate, GateModel, GateRef};
+use crate::unicorn::bitblasting::{
+    get_constant, or_gate, Gate, GateModel, GateRef, HashableGateRef, Witness,
+};
 use crate::unicorn::{Node, NodeRef};
 use crate::SatType;
 use anyhow::{anyhow, Result};
+use kissat_rs::Assignment;
 use log::{debug, warn};
+use std::collections::HashMap;
+use std::ops::Deref;
 
 //
 // Public Interface
@@ -14,6 +19,7 @@ pub fn solve_bad_states(
     sat_type: SatType,
     terminate_on_bad: bool,
     one_query: bool,
+    extract_witness: bool,
 ) -> Result<()> {
     match sat_type {
         SatType::None => unreachable!(),
@@ -22,18 +28,21 @@ pub fn solve_bad_states(
             gate_model,
             terminate_on_bad,
             one_query,
+            extract_witness,
         ),
         #[cfg(feature = "varisat")]
         SatType::Varisat => process_all_bad_states::<varisat_impl::VarisatSolver>(
             gate_model,
             terminate_on_bad,
             one_query,
+            extract_witness,
         ),
         #[cfg(feature = "cadical")]
         SatType::Cadical => process_all_bad_states::<cadical_impl::CadicalSolver>(
             gate_model,
             terminate_on_bad,
             one_query,
+            extract_witness,
         ),
     }
 }
@@ -45,7 +54,7 @@ pub fn solve_bad_states(
 #[allow(dead_code)]
 #[derive(Debug, Eq, PartialEq)]
 enum SATSolution {
-    Sat,
+    Sat(Option<Witness>),
     Unsat,
     Timeout,
 }
@@ -55,6 +64,55 @@ trait SATSolver {
     fn name() -> &'static str;
     fn prepare(&mut self, gate_model: &GateModel);
     fn decide(&mut self, gate_model: &GateModel, gate: &GateRef) -> SATSolution;
+
+    fn print_witness(witness: &HashMap<HashableGateRef, Assignment>) {
+        let mut input: HashMap<u64, Vec<bool>> = HashMap::new();
+        let mut start;
+        if witness.is_empty() {
+            panic!("Witness is empty");
+        }
+
+        for key in witness.keys() {
+            if let Gate::InputBit { name } = key.value.borrow().deref() {
+                // name = "1-byte-input[n=\d][bit=\d]"
+                //                        ^--- the 15th char
+                // assert: bit is explicit
+                start = name.find(']').unwrap();
+                let n = name[15..start].parse().unwrap();
+
+                let bit: usize = name[start + 6..name.len() - 1].parse().unwrap();
+
+                input.entry(n).or_insert(Vec::new());
+
+                let bit_assignment = match witness.get(key).unwrap() {
+                    Assignment::True => true,
+                    Assignment::False => false,
+                    Assignment::Both => false,
+                };
+
+                if let Some(bits) = input.get_mut(&n) {
+                    if let Some(bit_value) = bits.get_mut(bit) {
+                        *bit_value = bit_assignment;
+                    } else {
+                        bits.resize(bit + 1, bit_assignment);
+                    }
+                } else {
+                    let mut bits: Vec<bool> = Vec::new();
+                    bits.resize(bit + 1, bit_assignment);
+                    input.insert(n, bits);
+                }
+            } else {
+                panic!("Gates in the Witness must be Input Bit Gates.");
+            }
+        }
+        for bits in input {
+            print!("input at [n={}] ", bits.0);
+            for bit in bits.1 {
+                print!("{}", if bit { 1 } else { 0 });
+            }
+            println!();
+        }
+    }
 }
 
 fn process_single_bad_state<S: SATSolver>(
@@ -64,18 +122,28 @@ fn process_single_bad_state<S: SATSolver>(
     gate: &GateRef,
     terminate_on_bad: bool,
     one_query: bool,
+    extract_witness: bool,
 ) -> Result<()> {
     if !one_query {
         let bad_state = bad_state_.unwrap();
         if let Node::Bad { name, .. } = &*bad_state.borrow() {
             let solution = solver.decide(gate_model, gate);
             match solution {
-                SATSolution::Sat => {
+                SATSolution::Sat(witness) => {
                     warn!(
                         "Bad state '{}' is satisfiable ({})!",
                         name.as_deref().unwrap_or("?"),
                         S::name()
                     );
+
+                    if extract_witness {
+                        println!("solution by {}:", S::name());
+                        match witness {
+                            Some(witness) => S::print_witness(&witness.gate_assignment),
+                            None => println!("No Witness"),
+                        }
+                    }
+
                     if terminate_on_bad {
                         return Err(anyhow!("Bad state satisfiable"));
                     }
@@ -97,7 +165,7 @@ fn process_single_bad_state<S: SATSolver>(
         assert!(bad_state_.is_none());
         let solution = solver.decide(gate_model, gate);
         match solution {
-            SATSolution::Sat => {
+            SATSolution::Sat(..) => {
                 warn!("At least one bad state evaluates to true ({})", S::name());
             }
             SATSolution::Unsat => {
@@ -114,6 +182,7 @@ fn process_all_bad_states<S: SATSolver>(
     gate_model: &GateModel,
     terminate_on_bad: bool,
     one_query: bool,
+    extract_witness: bool,
 ) -> Result<()> {
     debug!("Using {:?} to decide bad states ...", S::name());
     let mut solver = S::new();
@@ -131,6 +200,7 @@ fn process_all_bad_states<S: SATSolver>(
                 gate,
                 terminate_on_bad,
                 one_query,
+                extract_witness,
             )?
         }
     } else {
@@ -171,6 +241,7 @@ fn process_all_bad_states<S: SATSolver>(
                 &ored_bad_states,
                 terminate_on_bad,
                 one_query,
+                extract_witness,
             )?
         }
     }
@@ -181,10 +252,11 @@ fn process_all_bad_states<S: SATSolver>(
 // TODO: Move this module into separate file.
 #[cfg(feature = "kissat")]
 pub mod kissat_impl {
-    use crate::unicorn::bitblasting::{GateModel, GateRef};
+    use crate::unicorn::bitblasting::{GateModel, GateRef, HashableGateRef, Witness};
     use crate::unicorn::cnf::{CNFBuilder, CNFContainer};
     use crate::unicorn::sat_solver::{SATSolution, SATSolver};
     use kissat_rs::{AnyState, INPUTState, Literal, Solver};
+    use std::collections::HashMap;
 
     pub struct KissatSolver {}
 
@@ -192,6 +264,7 @@ pub mod kissat_impl {
         current_var: i32,
         solver: Solver,
         state: Option<INPUTState>,
+        variables: HashMap<Literal, GateRef>,
     }
 
     impl CNFContainer for KissatContainer {
@@ -200,10 +273,12 @@ pub mod kissat_impl {
 
         fn new() -> Self {
             let (solver, state) = Solver::init();
+
             Self {
                 current_var: 1,
                 solver,
                 state: Some(state),
+                variables: HashMap::new(),
             }
         }
 
@@ -234,6 +309,10 @@ pub mod kissat_impl {
         fn record_variable_name(&mut self, _var: Literal, _name: String) {
             // nothing to be done here
         }
+
+        fn record_input(&mut self, var: Self::Variable, gate: &GateRef) {
+            self.variables.insert(var, gate.clone());
+        }
     }
 
     impl SATSolver for KissatSolver {
@@ -248,7 +327,6 @@ pub mod kissat_impl {
         fn prepare(&mut self, _gate_model: &GateModel) {
             // nothing to be done here
         }
-
         fn decide(&mut self, gate_model: &GateModel, gate: &GateRef) -> SATSolution {
             let mut builder = CNFBuilder::<KissatContainer>::new();
 
@@ -267,8 +345,27 @@ pub mod kissat_impl {
 
             let cnf = builder.container_mut();
             let state = cnf.state.take().unwrap();
+            let literals = cnf.variables.keys();
+
             match cnf.solver.solve(state).unwrap() {
-                AnyState::SAT(..) => SATSolution::Sat,
+                AnyState::SAT(sat_state) => {
+                    let mut witness = Witness {
+                        bad_state_gate: gate.clone(),
+                        gate_assignment: HashMap::new(),
+                    };
+                    let mut sat = sat_state;
+                    for literal in literals.copied() {
+                        let value = cnf.solver.value(literal, sat).unwrap();
+                        let assignment = value.0;
+
+                        sat = value.1;
+                        let gate_ref = cnf.variables.get(&literal).cloned();
+                        witness
+                            .gate_assignment
+                            .insert(HashableGateRef::from(gate_ref.unwrap()), assignment);
+                    }
+                    SATSolution::Sat(Some(witness))
+                }
                 AnyState::UNSAT(..) => SATSolution::Unsat,
                 AnyState::INPUT(..) => panic!("expecting 'SAT' or 'UNSAT' here"),
             }
@@ -325,6 +422,11 @@ pub mod varisat_impl {
         fn record_variable_name(&mut self, _var: Var, _name: String) {
             // nothing to be done here
         }
+
+        #[allow(unused_variables)]
+        fn record_input(&mut self, var: Self::Variable, gate: &GateRef) {
+            todo!()
+        }
     }
 
     impl SATSolver for VarisatSolver<'_> {
@@ -351,7 +453,7 @@ pub mod varisat_impl {
             let bad_state_lit = VarisatContainer::var(bad_state_var);
             self.builder.container_mut().solver.assume(&[bad_state_lit]);
             match self.builder.container_mut().solver.solve().unwrap() {
-                true => SATSolution::Sat,
+                true => SATSolution::Sat(None),
                 false => SATSolution::Unsat,
             }
         }
@@ -411,6 +513,11 @@ pub mod cadical_impl {
         fn record_variable_name(&mut self, _var: i32, _name: String) {
             // nothing to be done here
         }
+
+        #[allow(unused_variables)]
+        fn record_input(&mut self, var: Self::Variable, gate: &GateRef) {
+            todo!()
+        }
     }
 
     impl SATSolver for CadicalSolver {
@@ -445,7 +552,7 @@ pub mod cadical_impl {
                 .solver
                 .solve_with([bad_state_lit].iter().copied())
             {
-                Some(true) => SATSolution::Sat,
+                Some(true) => SATSolution::Sat(None),
                 Some(false) => SATSolution::Unsat,
                 None => SATSolution::Timeout,
             }

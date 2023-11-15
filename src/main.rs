@@ -93,6 +93,7 @@ fn main() -> Result<()> {
             let emulate_model = is_beator && args.get_flag("emulate");
             let arg0 = expect_arg::<String>(args, "input-file")?;
             let extras = collect_arg_values(args, "extras");
+            let extract_witness = args.get_flag("witness");
 
             let mut model = if !input_is_dimacs {
                 let mut model = if !input_is_btor2 {
@@ -205,7 +206,13 @@ fn main() -> Result<()> {
                     let gate_model = bitblast_model(&model.unwrap(), true, 64);
 
                     if sat_solver != SatType::None {
-                        solve_bad_states(&gate_model, sat_solver, terminate_on_bad, one_query)?
+                        solve_bad_states(
+                            &gate_model,
+                            sat_solver,
+                            terminate_on_bad,
+                            one_query,
+                            extract_witness,
+                        )?
                     }
 
                     if output_to_stdout {

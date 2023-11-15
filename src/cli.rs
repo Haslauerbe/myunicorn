@@ -259,6 +259,13 @@ pub fn args() -> Command {
                         .allow_hyphen_values(true)
                         .num_args(1..)
                 )
+                .arg(
+                    Arg::new("witness")
+                        .help("enables witness extraction")
+                        .short('w')
+                        .long("witness")
+                        .num_args(0)
+                )
         )
         .subcommand(
             Command::new("qubot")
