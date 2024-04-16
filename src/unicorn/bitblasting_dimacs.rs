@@ -91,9 +91,7 @@ impl CNFContainer for DimacsContainer {
         self.variable_names.push((var, name));
     }
 
-    fn record_input(&mut self, _var: Self::Variable, _gate: &GateRef) {
-        todo!();
-    }
+    fn record_input(&mut self, _var: Self::Variable, _gate: &GateRef) {}
 }
 
 impl DimacsWriter {

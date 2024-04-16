@@ -27,7 +27,10 @@ use ::unicorn::disassemble::disassemble;
 use ::unicorn::emulate::EmulatorState;
 use anyhow::{Context, Result};
 use bytesize::ByteSize;
-use cli::{collect_arg_values, expect_arg, expect_optional_arg, LogLevel, SatType, SmtType};
+use cli::{
+    collect_arg_values, collect_arg_values_as_u8, expect_arg, expect_optional_arg, LogLevel,
+    SatType, SmtType,
+};
 use env_logger::{Env, TimestampPrecision};
 use riscu::load_object_file;
 use std::{
@@ -63,7 +66,11 @@ fn main() -> Result<()> {
             let argv = [vec![arg0], extras].concat();
             let program = load_object_file(input)?;
             let mut emulator = EmulatorState::new(memory_size as usize);
+            let mut std_inputs = collect_arg_values_as_u8(args, "stdin");
+            std_inputs.reverse();
+
             emulator.bootstrap(&program, &argv);
+            emulator.set_stdin(std_inputs);
             emulator.run();
 
             Ok(())
@@ -93,12 +100,13 @@ fn main() -> Result<()> {
             let emulate_model = is_beator && args.get_flag("emulate");
             let arg0 = expect_arg::<String>(args, "input-file")?;
             let extras = collect_arg_values(args, "extras");
+            let argv = [vec![arg0], extras].concat();
+
             let extract_witness = args.get_flag("witness");
 
             let mut model = if !input_is_dimacs {
                 let mut model = if !input_is_btor2 {
                     let program = load_object_file(&input)?;
-                    let argv = [vec![arg0], extras].concat();
                     generate_model(&program, memory_size, max_heap, max_stack, &argv)?
                 } else {
                     parse_btor2_file(&input)
@@ -187,6 +195,7 @@ fn main() -> Result<()> {
                 let mut emulator = EmulatorState::new(memory_size as usize);
                 emulator.prepare(&program); // only loads the code
                 load_model_into_emulator(&mut emulator, &model.unwrap());
+
                 emulator.run();
                 return Ok(());
             }
@@ -203,7 +212,16 @@ fn main() -> Result<()> {
                     if !discretize {
                         replace_memory(model.as_mut().unwrap());
                     }
-                    let gate_model = bitblast_model(&model.unwrap(), true, 64);
+
+                    let input = expect_arg::<PathBuf>(args, "input-file")?;
+                    let program = load_object_file(input)?;
+                    let mut emulator = EmulatorState::new(memory_size as usize);
+
+                    if extract_witness {
+                        emulator.bootstrap(&program, &argv);
+                    }
+
+                    let gate_model = bitblast_model(model.as_ref().unwrap(), true, 64);
 
                     if sat_solver != SatType::None {
                         solve_bad_states(
@@ -211,6 +229,7 @@ fn main() -> Result<()> {
                             sat_solver,
                             terminate_on_bad,
                             one_query,
+                            emulator,
                             extract_witness,
                         )?
                     }

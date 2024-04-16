@@ -1,6 +1,4 @@
-use crate::unicorn::bitblasting::{
-    get_constant, or_gate, Gate, GateModel, GateRef, HashableGateRef, Witness,
-};
+use crate::unicorn::bitblasting::{get_constant, or_gate, Gate, GateModel, GateRef, Witness};
 use crate::unicorn::{Node, NodeRef};
 use crate::SatType;
 use anyhow::{anyhow, Result};
@@ -8,17 +6,19 @@ use kissat_rs::Assignment;
 use log::{debug, warn};
 use std::collections::HashMap;
 use std::ops::Deref;
+use std::panic;
+use unicorn::emulate::EmulatorState;
 
 //
 // Public Interface
 //
-
 #[allow(unused_variables)]
 pub fn solve_bad_states(
     gate_model: &GateModel,
     sat_type: SatType,
     terminate_on_bad: bool,
     one_query: bool,
+    emulator: EmulatorState,
     extract_witness: bool,
 ) -> Result<()> {
     match sat_type {
@@ -28,6 +28,7 @@ pub fn solve_bad_states(
             gate_model,
             terminate_on_bad,
             one_query,
+            emulator,
             extract_witness,
         ),
         #[cfg(feature = "varisat")]
@@ -35,6 +36,7 @@ pub fn solve_bad_states(
             gate_model,
             terminate_on_bad,
             one_query,
+            emulator,
             extract_witness,
         ),
         #[cfg(feature = "cadical")]
@@ -42,6 +44,7 @@ pub fn solve_bad_states(
             gate_model,
             terminate_on_bad,
             one_query,
+            emulator,
             extract_witness,
         ),
     }
@@ -50,6 +53,24 @@ pub fn solve_bad_states(
 //
 // Private Implementation
 //
+
+fn emulate_witness(emulator: &mut EmulatorState, witness: Witness) {
+    emulator.set_stdin(witness.input_bytes);
+    println!("input vec: {:?}", emulator.get_stdin());
+
+    let result = panic::catch_unwind(|| {
+        let mut emulator_clone: EmulatorState;
+        emulator_clone = emulator.clone();
+
+        emulator_clone.run();
+    });
+
+    if let Err(panic_payload) = result {
+        println!("panic : {:?}", panic_payload);
+    } else {
+        println!("no panic");
+    }
+}
 
 #[allow(dead_code)]
 #[derive(Debug, Eq, PartialEq)]
@@ -65,7 +86,8 @@ trait SATSolver {
     fn prepare(&mut self, gate_model: &GateModel);
     fn decide(&mut self, gate_model: &GateModel, gate: &GateRef) -> SATSolution;
 
-    fn print_witness(witness: &HashMap<HashableGateRef, Assignment>) {
+    fn print_witness(witness_ref: &mut Witness) {
+        let witness = &witness_ref.gate_assignment;
         let mut input: HashMap<u64, Vec<bool>> = HashMap::new();
         let mut start;
         if witness.is_empty() {
@@ -80,7 +102,8 @@ trait SATSolver {
                 start = name.find(']').unwrap();
                 let n = name[15..start].parse().unwrap();
 
-                let bit: usize = name[start + 6..name.len() - 1].parse().unwrap();
+                let mut bit: usize = name[start + 6..name.len() - 1].parse().unwrap();
+                bit = 7 - bit;
 
                 input.entry(n).or_insert(Vec::new());
 
@@ -106,11 +129,14 @@ trait SATSolver {
             }
         }
         for bits in input {
+            let mut output = String::new();
             print!("input at [n={}] ", bits.0);
             for bit in bits.1 {
-                print!("{}", if bit { 1 } else { 0 });
+                output.push(if bit { '1' } else { '0' });
             }
-            println!();
+            let bits_as_int = u8::from_str_radix(&output, 2).unwrap();
+            witness_ref.input_bytes.push(bits_as_int);
+            println!("{} {}", output, bits_as_int);
         }
     }
 }
@@ -122,25 +148,34 @@ fn process_single_bad_state<S: SATSolver>(
     gate: &GateRef,
     terminate_on_bad: bool,
     one_query: bool,
-    extract_witness: bool,
+    (emulator, extract_witness): (&mut EmulatorState, bool),
 ) -> Result<()> {
     if !one_query {
         let bad_state = bad_state_.unwrap();
         if let Node::Bad { name, .. } = &*bad_state.borrow() {
+            println!(
+                "process_single_bad_state {}",
+                name.as_deref().unwrap_or("?")
+            );
             let solution = solver.decide(gate_model, gate);
             match solution {
-                SATSolution::Sat(witness) => {
+                SATSolution::Sat(witness_opt) => {
                     warn!(
                         "Bad state '{}' is satisfiable ({})!",
                         name.as_deref().unwrap_or("?"),
                         S::name()
                     );
-
                     if extract_witness {
-                        println!("solution by {}:", S::name());
-                        match witness {
-                            Some(witness) => S::print_witness(&witness.gate_assignment),
-                            None => println!("No Witness"),
+                        match witness_opt {
+                            Some(mut witness) => {
+                                println!("solution by {}:", S::name());
+                                S::print_witness(&mut witness);
+                                // TODO: flag for witness emulation
+                                emulate_witness(emulator, witness);
+                            }
+                            None => {
+                                println!("No Witness");
+                            }
                         }
                     }
 
@@ -182,6 +217,7 @@ fn process_all_bad_states<S: SATSolver>(
     gate_model: &GateModel,
     terminate_on_bad: bool,
     one_query: bool,
+    mut emulator: EmulatorState,
     extract_witness: bool,
 ) -> Result<()> {
     debug!("Using {:?} to decide bad states ...", S::name());
@@ -192,6 +228,7 @@ fn process_all_bad_states<S: SATSolver>(
             .bad_state_nodes
             .iter()
             .zip(gate_model.bad_state_gates.iter());
+
         for (bad_state, gate) in zip {
             process_single_bad_state(
                 &mut solver,
@@ -200,8 +237,8 @@ fn process_all_bad_states<S: SATSolver>(
                 gate,
                 terminate_on_bad,
                 one_query,
-                extract_witness,
-            )?
+                (&mut emulator, extract_witness),
+            )?;
         }
     } else {
         let mut ored_bad_states: GateRef;
@@ -241,8 +278,8 @@ fn process_all_bad_states<S: SATSolver>(
                 &ored_bad_states,
                 terminate_on_bad,
                 one_query,
-                extract_witness,
-            )?
+                (&mut emulator, extract_witness),
+            )?;
         }
     }
 
@@ -352,6 +389,7 @@ pub mod kissat_impl {
                     let mut witness = Witness {
                         bad_state_gate: gate.clone(),
                         gate_assignment: HashMap::new(),
+                        input_bytes: vec![],
                     };
                     let mut sat = sat_state;
                     for literal in literals.copied() {
