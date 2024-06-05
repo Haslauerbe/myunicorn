@@ -3,7 +3,7 @@ use crate::unicorn::{Node, NodeRef};
 use crate::SatType;
 use anyhow::{anyhow, Result};
 use kissat_rs::Assignment;
-use log::{debug, warn};
+use log::{debug, trace, warn};
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::panic;
@@ -53,10 +53,9 @@ pub fn solve_bad_states(
 //
 // Private Implementation
 //
-
+#[should_panic]
 fn emulate_witness(emulator: &mut EmulatorState, witness: Witness) {
     emulator.set_stdin(witness.input_bytes);
-    println!("input vec: {:?}", emulator.get_stdin());
 
     let result = panic::catch_unwind(|| {
         let mut emulator_clone: EmulatorState;
@@ -65,11 +64,11 @@ fn emulate_witness(emulator: &mut EmulatorState, witness: Witness) {
         emulator_clone.run();
     });
 
-    if let Err(panic_payload) = result {
-        println!("panic : {:?}", panic_payload);
-    } else {
-        println!("no panic");
-    }
+    assert!(
+        result.is_err(),
+        "Expected panic did not occur while testing {:?}",
+        witness.name
+    );
 }
 
 #[allow(dead_code)]
@@ -105,7 +104,7 @@ trait SATSolver {
                 let mut bit: usize = name[start + 6..name.len() - 1].parse().unwrap();
                 bit = 7 - bit;
 
-                input.entry(n).or_insert(Vec::new());
+                //input.entry(n).or_insert(Vec::new());
 
                 let bit_assignment = match witness.get(key).unwrap() {
                     Assignment::True => true,
@@ -153,7 +152,7 @@ fn process_single_bad_state<S: SATSolver>(
     if !one_query {
         let bad_state = bad_state_.unwrap();
         if let Node::Bad { name, .. } = &*bad_state.borrow() {
-            println!(
+            trace!(
                 "process_single_bad_state {}",
                 name.as_deref().unwrap_or("?")
             );
@@ -168,6 +167,7 @@ fn process_single_bad_state<S: SATSolver>(
                     if extract_witness {
                         match witness_opt {
                             Some(mut witness) => {
+                                witness.name = name.clone().unwrap();
                                 println!("solution by {}:", S::name());
                                 S::print_witness(&mut witness);
                                 // TODO: flag for witness emulation
@@ -387,6 +387,7 @@ pub mod kissat_impl {
             match cnf.solver.solve(state).unwrap() {
                 AnyState::SAT(sat_state) => {
                     let mut witness = Witness {
+                        name: String::new(),
                         bad_state_gate: gate.clone(),
                         gate_assignment: HashMap::new(),
                         input_bytes: vec![],

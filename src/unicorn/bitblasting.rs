@@ -28,6 +28,7 @@ pub struct GateModel {
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct Witness {
+    pub name: String,
     pub bad_state_gate: GateRef,
     pub gate_assignment: HashMap<HashableGateRef, Assignment>,
     pub input_bytes: Vec<u8>,
