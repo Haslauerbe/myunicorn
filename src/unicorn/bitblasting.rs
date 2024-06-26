@@ -1,5 +1,4 @@
 use crate::unicorn::{HashableNodeRef, Model, Node, NodeRef, NodeType};
-use kissat_rs::Assignment;
 use log::{info, warn};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -30,7 +29,7 @@ pub struct GateModel {
 pub struct Witness {
     pub name: String,
     pub bad_state_gate: GateRef,
-    pub gate_assignment: HashMap<HashableGateRef, Assignment>,
+    pub gate_assignment: HashMap<HashableGateRef, bool>,
     pub input_bytes: Vec<u8>,
 }
 

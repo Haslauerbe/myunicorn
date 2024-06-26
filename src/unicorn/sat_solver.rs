@@ -2,7 +2,6 @@ use crate::unicorn::bitblasting::{get_constant, or_gate, Gate, GateModel, GateRe
 use crate::unicorn::{Node, NodeRef};
 use crate::SatType;
 use anyhow::{anyhow, Result};
-use kissat_rs::Assignment;
 use log::{debug, trace, warn};
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -106,11 +105,7 @@ trait SATSolver {
 
                 //input.entry(n).or_insert(Vec::new());
 
-                let bit_assignment = match witness.get(key).unwrap() {
-                    Assignment::True => true,
-                    Assignment::False => false,
-                    Assignment::Both => false,
-                };
+                let bit_assignment = *witness.get(key).unwrap();
 
                 if let Some(bits) = input.get_mut(&n) {
                     if let Some(bit_value) = bits.get_mut(bit) {
@@ -292,7 +287,7 @@ pub mod kissat_impl {
     use crate::unicorn::bitblasting::{GateModel, GateRef, HashableGateRef, Witness};
     use crate::unicorn::cnf::{CNFBuilder, CNFContainer};
     use crate::unicorn::sat_solver::{SATSolution, SATSolver};
-    use kissat_rs::{AnyState, INPUTState, Literal, Solver};
+    use kissat_rs::{AnyState, Assignment, INPUTState, Literal, Solver};
     use std::collections::HashMap;
 
     pub struct KissatSolver {}
@@ -395,7 +390,14 @@ pub mod kissat_impl {
                     let mut sat = sat_state;
                     for literal in literals.copied() {
                         let value = cnf.solver.value(literal, sat).unwrap();
-                        let assignment = value.0;
+
+                        let assignment = match value.0 {
+                            Assignment::True => true,
+                            Assignment::False => false,
+                            Assignment::Both => false,
+                        };
+
+                        // let assignment = value.0;
 
                         sat = value.1;
                         let gate_ref = cnf.variables.get(&literal).cloned();
