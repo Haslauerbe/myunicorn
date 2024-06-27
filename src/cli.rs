@@ -457,9 +457,9 @@ pub fn collect_arg_values(m: &ArgMatches, arg: &str) -> Vec<String> {
     }
 }
 
-pub fn collect_arg_values_as_u8(m: &ArgMatches, arg: &str) -> Vec<u8> {
+pub fn collect_arg_values_as_usize(m: &ArgMatches, arg: &str) -> Vec<usize> {
     match m.get_many::<String>(arg) {
-        Some(iter) => iter.map(|it| it.parse::<u8>().unwrap()).collect(),
+        Some(iter) => iter.map(|it| it.parse::<usize>().unwrap()).collect(),
         None => vec![],
     }
 }

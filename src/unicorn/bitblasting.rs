@@ -30,7 +30,7 @@ pub struct Witness {
     pub name: String,
     pub bad_state_gate: GateRef,
     pub gate_assignment: HashMap<HashableGateRef, bool>,
-    pub input_bytes: Vec<u8>,
+    pub input_bytes: Vec<usize>,
 }
 
 pub type GateRef = Rc<RefCell<Gate>>;

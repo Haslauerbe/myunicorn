@@ -28,7 +28,7 @@ use ::unicorn::emulate::EmulatorState;
 use anyhow::{Context, Result};
 use bytesize::ByteSize;
 use cli::{
-    collect_arg_values, collect_arg_values_as_u8, expect_arg, expect_optional_arg, LogLevel,
+    collect_arg_values, collect_arg_values_as_usize, expect_arg, expect_optional_arg, LogLevel,
     SatType, SmtType,
 };
 use env_logger::{Env, TimestampPrecision};
@@ -66,7 +66,7 @@ fn main() -> Result<()> {
             let argv = [vec![arg0], extras].concat();
             let program = load_object_file(input)?;
             let mut emulator = EmulatorState::new(memory_size as usize);
-            let mut std_inputs = collect_arg_values_as_u8(args, "stdin");
+            let mut std_inputs = collect_arg_values_as_usize(args, "stdin");
             std_inputs.reverse();
 
             emulator.bootstrap(&program, &argv);

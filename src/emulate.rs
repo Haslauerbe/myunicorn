@@ -24,7 +24,7 @@ pub struct EmulatorState {
     running: bool,
     stdin: Stdin,
     stdout: Stdout,
-    std_inputs: Vec<u8>,
+    std_inputs: Vec<usize>,
 }
 
 impl Clone for EmulatorState {
@@ -71,10 +71,10 @@ impl EmulatorState {
     // The emulator reads from this vector instead of the Stdin when the
     // read syscall (with file direction 0) is called in the emulated code.
     // Will call the syscall again as soon the std_inputs is empty.
-    pub fn set_stdin(&mut self, inputs: Vec<u8>) {
+    pub fn set_stdin(&mut self, inputs: Vec<usize>) {
         self.std_inputs = inputs;
     }
-    pub fn get_stdin(&self) -> &Vec<u8> {
+    pub fn get_stdin(&self) -> &Vec<usize> {
         &self.std_inputs
     }
 

@@ -54,8 +54,13 @@ pub fn solve_bad_states(
 //
 #[should_panic]
 fn emulate_witness(emulator: &mut EmulatorState, witness: Witness) {
+    println!(
+        "Emulating bad state {:?} with input {:?}:",
+        witness.name,
+        witness.input_bytes.clone()
+    );
+    println!("---------------------------------------------------");
     emulator.set_stdin(witness.input_bytes);
-
     let result = panic::catch_unwind(|| {
         let mut emulator_clone: EmulatorState;
         emulator_clone = emulator.clone();
@@ -63,11 +68,10 @@ fn emulate_witness(emulator: &mut EmulatorState, witness: Witness) {
         emulator_clone.run();
     });
 
-    assert!(
-        result.is_err(),
-        "Expected panic did not occur while testing {:?}",
-        witness.name
-    );
+    if result.is_ok() {
+        println!("Bad state {} did not produce expected panic.", witness.name);
+    }
+    println!("---------------------------------------------------\n");
 }
 
 #[allow(dead_code)]
@@ -89,7 +93,8 @@ trait SATSolver {
         let mut input: HashMap<u64, Vec<bool>> = HashMap::new();
         let mut start;
         if witness.is_empty() {
-            panic!("Witness is empty");
+            println!("No witness produced for this bad state.");
+            return;
         }
 
         for key in witness.keys() {
@@ -99,11 +104,9 @@ trait SATSolver {
                 // assert: bit is explicit
                 start = name.find(']').unwrap();
                 let n = name[15..start].parse().unwrap();
-
+                let size = name.chars().next().and_then(|c| c.to_digit(10)).unwrap() as usize;
                 let mut bit: usize = name[start + 6..name.len() - 1].parse().unwrap();
-                bit = 7 - bit;
-
-                //input.entry(n).or_insert(Vec::new());
+                bit = size * 8 - 1 - bit;
 
                 let bit_assignment = *witness.get(key).unwrap();
 
@@ -124,11 +127,12 @@ trait SATSolver {
         }
         for bits in input {
             let mut output = String::new();
-            print!("input at [n={}] ", bits.0);
+            print!("  input at [n={}] ", bits.0);
+
             for bit in bits.1 {
                 output.push(if bit { '1' } else { '0' });
             }
-            let bits_as_int = u8::from_str_radix(&output, 2).unwrap();
+            let bits_as_int = usize::from_str_radix(&output, 2).unwrap();
             witness_ref.input_bytes.push(bits_as_int);
             println!("{} {}", output, bits_as_int);
         }
@@ -163,7 +167,7 @@ fn process_single_bad_state<S: SATSolver>(
                         match witness_opt {
                             Some(mut witness) => {
                                 witness.name = name.clone().unwrap();
-                                println!("solution by {}:", S::name());
+                                println!("Solution by {}: ", S::name());
                                 S::print_witness(&mut witness);
                                 // TODO: flag for witness emulation
                                 emulate_witness(emulator, witness);
@@ -284,7 +288,7 @@ fn process_all_bad_states<S: SATSolver>(
 // TODO: Move this module into separate file.
 #[cfg(feature = "kissat")]
 pub mod kissat_impl {
-    use crate::unicorn::bitblasting::{GateModel, GateRef, HashableGateRef, Witness};
+    use crate::unicorn::bitblasting::{Gate, GateModel, GateRef, HashableGateRef, Witness};
     use crate::unicorn::cnf::{CNFBuilder, CNFContainer};
     use crate::unicorn::sat_solver::{SATSolution, SATSolver};
     use kissat_rs::{AnyState, Assignment, INPUTState, Literal, Solver};
@@ -343,7 +347,14 @@ pub mod kissat_impl {
         }
 
         fn record_input(&mut self, var: Self::Variable, gate: &GateRef) {
-            self.variables.insert(var, gate.clone());
+            if let Gate::InputBit { name } = &*gate.borrow() {
+                if name.len() > 1 && name[1..].starts_with("-byte-input") {
+                    //debug!("Gate {:?} recorded in witness", name);
+                    self.variables.insert(var, gate.clone());
+                } else {
+                    //debug!("Gate {:?} not recorded in witness", name);
+                }
+            }
         }
     }
 
