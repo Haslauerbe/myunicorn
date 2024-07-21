@@ -64,10 +64,8 @@ fn emulate_witness(emulator: &mut EmulatorState, witness: Witness) {
     let result = panic::catch_unwind(|| {
         let mut emulator_clone: EmulatorState;
         emulator_clone = emulator.clone();
-
         emulator_clone.run();
     });
-
     if result.is_ok() {
         println!("Bad state {} did not produce expected panic.", witness.name);
     }
@@ -109,7 +107,6 @@ trait SATSolver {
                 bit = size * 8 - 1 - bit;
 
                 let bit_assignment = *witness.get(key).unwrap();
-
                 if let Some(bits) = input.get_mut(&n) {
                     if let Some(bit_value) = bits.get_mut(bit) {
                         *bit_value = bit_assignment;
@@ -349,10 +346,7 @@ pub mod kissat_impl {
         fn record_input(&mut self, var: Self::Variable, gate: &GateRef) {
             if let Gate::InputBit { name } = &*gate.borrow() {
                 if name.len() > 1 && name[1..].starts_with("-byte-input") {
-                    //debug!("Gate {:?} recorded in witness", name);
                     self.variables.insert(var, gate.clone());
-                } else {
-                    //debug!("Gate {:?} not recorded in witness", name);
                 }
             }
         }
@@ -401,15 +395,11 @@ pub mod kissat_impl {
                     let mut sat = sat_state;
                     for literal in literals.copied() {
                         let value = cnf.solver.value(literal, sat).unwrap();
-
                         let assignment = match value.0 {
                             Assignment::True => true,
                             Assignment::False => false,
                             Assignment::Both => false,
                         };
-
-                        // let assignment = value.0;
-
                         sat = value.1;
                         let gate_ref = cnf.variables.get(&literal).cloned();
                         witness
